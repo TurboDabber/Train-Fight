@@ -1,0 +1,204 @@
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+  }
+  canvas#battleCanvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 1;
+  }
+  #gameOver {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(0, 0, 0, 0.9);
+    color: white;
+    border: 2px solid white;
+    padding: 20px;
+    z-index: 2;
+    display: none;
+    text-align: center;
+  }
+  #gameOver button {
+    padding: 10px 20px;
+    font-size: 1.2rem;
+    cursor: pointer;
+    margin-top: 10px;
+  }
+</style>
+<div id="gameOver">
+  <h1 id="resultText"></h1>
+  <button onclick="restartGame()">Zagraj ponownie</button>
+</div>
+<canvas id="battleCanvas"></canvas>
+<script>
+const canvas = document.getElementById("battleCanvas");
+const ctx = canvas.getContext("2d");
+function resizeCanvas() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+window.addEventListener("resize", resizeCanvas);
+resizeCanvas();
+
+const gravity = 1;
+const jumpPower = 18;
+const trainTopY = canvas.height - 100;
+
+const hero = { x: 100, y: trainTopY - 100, width: 50, height: 100, vy: 0, speed: 5, health: 100, facing: 'right', grounded: false };
+const godzilla = { x: canvas.width - 150, y: trainTopY - 120, width: 80, height: 120, vy: 0, speed: 2, color: 'green', health: 100 };
+const keys = {};
+let attackCooldown = 0;
+let activeAttack = null;
+let godzillaAttackCooldown = 0;
+let gameEnded = false;
+
+document.addEventListener('keydown', e => keys[e.key.toLowerCase()] = true);
+document.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
+
+function showGameOver(won) {
+  document.getElementById('resultText').textContent = won ? "You WON!" : "WASTED R.IP.!";
+  document.getElementById('gameOver').style.display = 'block';
+  gameEnded = true;
+}
+
+function restartGame() {
+  hero.health = 100;
+  godzilla.health = 100;
+  hero.x = 100;
+  godzilla.x = canvas.width - 150;
+  gameEnded = false;
+  document.getElementById('gameOver').style.display = 'none';
+  requestAnimationFrame(gameLoop);
+}
+
+function isColliding(a, b) {
+  return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
+}
+
+function drawLayer(color, height, offsetY, parallaxFactor, addWindows = false, varied = false) {
+  const offset = -hero.x * parallaxFactor;
+  ctx.fillStyle = color;
+  ctx.fillRect(offset, canvas.height - offsetY - height, canvas.width * 2, height);
+  if (addWindows) {
+    for (let i = 0; i < canvas.width * 2; i += 60) {
+      const h = varied ? 150 + Math.random() * 200 : height;
+      const c = ['#3a3a3a', '#444', '#555'][(i / 60) % 3];
+      ctx.fillStyle = c;
+      ctx.fillRect(offset + i, canvas.height - 100 - h, 40, h);
+      ctx.fillStyle = '#7ec8e3';
+      for (let x = 5; x < 40; x += 15) {
+        for (let y = 5; y < h - 15; y += 20) {
+          ctx.fillRect(offset + i + x, canvas.height - 100 - h + y, 8, 8);
+        }
+      }
+    }
+  }
+}
+
+function drawBackground() {
+  ctx.fillStyle = '#87CEEB';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  drawLayer('#444', 300, 100, 0.05, true, true);
+  drawLayer('#444', 300, 80, 0.1, true, true);
+  drawLayer('#444', 300, 60, 0.15, true, true);
+  const wagonWidth = 120;
+  const wagonHeight = 100;
+  const numWagons = Math.ceil(canvas.width / wagonWidth) + 2;
+  for (let i = 0; i < numWagons; i++) {
+    const x = i * wagonWidth;
+    ctx.fillStyle = '#555';
+    ctx.fillRect(x, canvas.height - wagonHeight, wagonWidth - 4, wagonHeight);
+    ctx.fillStyle = '#add8e6';
+    for (let w = 10; w < wagonWidth - 20; w += 30) {
+      ctx.fillRect(x + w, canvas.height - wagonHeight + 30, 20, 20);
+    }
+    ctx.fillStyle = '#222';
+    ctx.beginPath(); ctx.arc(x + 20, canvas.height - 5, 5, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(x + wagonWidth - 30, canvas.height - 5, 5, 0, Math.PI * 2); ctx.fill();
+  }
+}
+
+function drawHero(hero) {
+  const { x, y, width, height } = hero;
+  const part1 = height * 0.5, part2 = height * 0.4, part3 = height * 0.1;
+  ctx.fillStyle = 'white'; ctx.fillRect(x, y + part2 + part3, width, part1);
+  ctx.fillStyle = 'yellow'; ctx.fillRect(x, y + part3, width, part2);
+  ctx.fillStyle = 'white'; ctx.fillRect(x, y, width, part3);
+  if (activeAttack) {
+    ctx.fillStyle = 'red';
+    ctx.fillRect(hero.facing === 'right' ? x + width : x - 10, y + height / 3, 10, 10);
+  }
+}
+
+function drawCharacter(character) {
+  if (character === hero) drawHero(hero);
+  else {
+    ctx.fillStyle = character.color;
+    ctx.fillRect(character.x, character.y, character.width, character.height);
+  }
+}
+
+function drawHealthBar(x, y, width, height, health) {
+  ctx.fillStyle = 'red'; ctx.fillRect(x, y, width, height);
+  ctx.fillStyle = 'lime'; ctx.fillRect(x, y, (health / 100) * width, height);
+  ctx.strokeStyle = 'white'; ctx.strokeRect(x, y, width, height);
+}
+
+function update() {
+  if (gameEnded) return;
+  if (keys['a']) { hero.x -= hero.speed; hero.facing = 'left'; }
+  if (keys['d']) { hero.x += hero.speed; hero.facing = 'right'; }
+  if (keys['w'] && hero.grounded) { hero.vy = -jumpPower; hero.grounded = false; }
+  hero.vy += gravity;
+  hero.y += hero.vy;
+  if (hero.y + hero.height >= trainTopY) {
+    hero.y = trainTopY - hero.height; hero.vy = 0; hero.grounded = true;
+  }
+  if (godzilla.x > hero.x) godzilla.x -= godzilla.speed;
+  else godzilla.x += godzilla.speed;
+  godzilla.vy += gravity;
+  godzilla.y += godzilla.vy;
+  if (godzilla.y + godzilla.height >= trainTopY) {
+    godzilla.y = trainTopY - godzilla.height; godzilla.vy = 0;
+  }
+  if (keys['e'] && attackCooldown <= 0 && isColliding(hero, godzilla)) {
+    godzilla.health = Math.max(0, godzilla.health - 10);
+    attackCooldown = 30; activeAttack = 10;
+  }
+  if (godzillaAttackCooldown <= 0 && isColliding(godzilla, hero)) {
+    hero.health = Math.max(0, hero.health - 5);
+    godzillaAttackCooldown = 60;
+  }
+  if (attackCooldown > 0) attackCooldown--;
+  if (godzillaAttackCooldown > 0) godzillaAttackCooldown--;
+  if (activeAttack > 0) activeAttack--;
+  else activeAttack = null;
+  hero.x = Math.max(0, Math.min(canvas.width - hero.width, hero.x));
+  hero.y = Math.min(hero.y, trainTopY - hero.height);
+  if (hero.health <= 0) showGameOver(false);
+  if (godzilla.health <= 0) showGameOver(true);
+}
+
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  drawBackground();
+  drawCharacter(hero);
+  drawCharacter(godzilla);
+  drawHealthBar(20, 20, 200, 20, hero.health);
+  drawHealthBar(canvas.width - 220, 20, 200, 20, godzilla.health);
+}
+
+function gameLoop() {
+  if (!gameEnded) {
+    update();
+    draw();
+    requestAnimationFrame(gameLoop);
+  }
+}
+gameLoop();
+</script>
